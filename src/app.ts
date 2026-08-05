@@ -120,8 +120,6 @@ app.get('/files',(req:Request,res:Response)=>{
 app.post('/upload-file', upload.single('uploaded_file'),(req:Request,res:Response)=>{
     if (!req.file) return res.status(400).json({ error: 'No file.' });
 
-    console.log('COOKIE',JSON.parse(req?.cookies?.user_data) ?? "No data")
-
 
     const newFileEntry = {
       file_name: req.file.originalname,
@@ -133,8 +131,8 @@ app.post('/upload-file', upload.single('uploaded_file'),(req:Request,res:Respons
       created_by: "Admin",
     };
 
-    if(req?.cookies?.user_data){
-        const userData= JSON.parse(req.cookies.user_data)
+    if(req?.cookies?.user_data ){
+        const userData= JSON?.parse(req.cookies.user_data) ?? "Admin"
         newFileEntry.created_by= userData?.username
         
     }
