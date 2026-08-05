@@ -10,7 +10,7 @@ import cookieParser from 'cookie-parser'
 
 const app = express()
 
-const port = process.env.PORT || 3000
+const port = Number(process.env.PORT) || 3000
 
 const DUP_DB_FILES= [...DB_FILES]
 
@@ -154,7 +154,7 @@ app.post('/upload-file', upload.single('uploaded_file'),(req:Request,res:Respons
 
 
 
-app.listen(port, () => {
+app.listen(port,'0.0.0.0', () => {
     console.log(`Server running on port ${port}`)
 }) 
 
