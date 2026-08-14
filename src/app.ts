@@ -16,7 +16,7 @@ const DUP_DB_FILES= [...DB_FILES]
 
 app.use(express.json())
 app.use(cors({
-  origin: true,
+  origin: 'https://frontend-instance-for-demo-800143476860.asia-south1.run.app',
   credentials: true
 }))
 
