@@ -11,7 +11,6 @@ import { encrypt, decrypt } from './lib/crypto.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Storage } from '@google-cloud/storage'
-import * as gcpMetadata from 'gcp-metadata'
 import { authenticateToken, checkFolderPermission } from './lib/auth.js'
 import type { AuthenticatedRequest } from './lib/auth.js'
 
@@ -41,10 +40,14 @@ for (const user of DUP_USERS) {
   }
 }
 
+const FRONTEND_CR_INSTANCE= process.env.FRONTEND_CR_INSTANCE || ""
+const FRONTEND_APP_LB= process.env.FRONTEND_APP_LB || ""
+
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173', 
-  "https://frontend-instance-for-demo-800143476860.asia-south1.run.app"
+  FRONTEND_CR_INSTANCE,
+  FRONTEND_APP_LB
 ]
 
 app.use(
@@ -78,11 +81,11 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage })
 
-app.get('/', (req: Request, res: Response) => {
+app.get('/api/', (req: Request, res: Response) => {
   res.json({ message: 'Hello world' })
 })
 
-app.post('/login', (req: Request, res: Response) => {
+app.post('/api/login', (req: Request, res: Response) => {
   const { username, password } = req.body
   try {
     const user = DUP_USERS.find((user) => user.username.toLowerCase() === username?.trim().toLowerCase())
@@ -126,7 +129,7 @@ app.post('/login', (req: Request, res: Response) => {
   }
 })
 
-app.get('/files', (req: Request, res: Response) => {
+app.get('/api/files', (req: Request, res: Response) => {
   try {
     const files = DUP_DB_FILES.map((file) => ({
       id: file.id,
@@ -148,7 +151,7 @@ app.get('/files', (req: Request, res: Response) => {
   }
 })
 
-app.get('/users', (req: Request, res: Response) => {
+app.get('/api/users', (req: Request, res: Response) => {
   try {
     res.status(200).json({
       status: 'success',
@@ -160,7 +163,7 @@ app.get('/users', (req: Request, res: Response) => {
   }
 })
 
-app.post('/create-user', (req: Request, res: Response) => {
+app.post('/api/create-user', (req: Request, res: Response) => {
   try {
     const { username, password, role, permissions } = req.body
     if (!username || !password || !role) {
@@ -195,7 +198,7 @@ app.post('/create-user', (req: Request, res: Response) => {
   }
 })
 
-app.put('/users/:userid', (req: Request, res: Response) => {
+app.put('/api/users/:userid', (req: Request, res: Response) => {
   try {
     const { userid } = req.params
     const { role, permissions } = req.body
@@ -226,7 +229,7 @@ app.put('/users/:userid', (req: Request, res: Response) => {
   }
 })
 
-app.post('/upload-file', upload.single('uploaded_file'), (req: Request, res: Response) => {
+app.post('/api/upload-file', upload.single('uploaded_file'), (req: Request, res: Response) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file.' })
   }
@@ -269,7 +272,7 @@ app.post('/upload-file', upload.single('uploaded_file'), (req: Request, res: Res
   })
 })
 
-app.post('/generate-upload-url', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/generate-upload-url', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { fileName, contentType, project = 'general' } = req.body
     if (!fileName) {
@@ -351,7 +354,7 @@ app.post('/generate-upload-url', authenticateToken, async (req: AuthenticatedReq
   }
 })
 
-app.put('/local-upload-fallback', (req: Request, res: Response) => {
+app.put('/api/local-upload-fallback', (req: Request, res: Response) => {
   try {
     const { uniqueName } = req.query
     if (!uniqueName || typeof uniqueName !== 'string') {
@@ -381,7 +384,7 @@ app.put('/local-upload-fallback', (req: Request, res: Response) => {
   }
 })
 
-app.post('/register-file', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/register-file', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
   try {
     const { fileName, uniqueName, project = 'general', fileType = 'unknown', fileSize = 0 } = req.body
     if (!fileName || !uniqueName) {
@@ -417,7 +420,7 @@ app.post('/register-file', authenticateToken, (req: AuthenticatedRequest, res: R
   }
 })
 
-app.put('/files/:id', (req: Request, res: Response) => {
+app.put('/api/files/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params
     const { file_name } = req.body
@@ -441,7 +444,7 @@ app.put('/files/:id', (req: Request, res: Response) => {
   }
 })
 
-app.delete('/files/:id', (req: Request, res: Response) => {
+app.delete('/api/files/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params
     const index = DUP_DB_FILES.findIndex(f => f.id === id)
