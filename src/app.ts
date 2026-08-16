@@ -8,9 +8,18 @@ import { randomUUID } from 'node:crypto'
 import cookieParser from 'cookie-parser'
 import jwt from 'jsonwebtoken'
 import { encrypt, decrypt } from './lib/crypto.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { Storage } from '@google-cloud/storage'
+import * as gcpMetadata from 'gcp-metadata'
+import { authenticateToken, checkFolderPermission } from './lib/auth.js'
+import type { AuthenticatedRequest } from './lib/auth.js'
 
 const app = express()
 const port = Number(process.env.PORT) || 8080
+
+const gcsStorage = new Storage()
+const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'bucket_for_gcp_app_ar'
 
 const DUP_DB_FILES = DB_FILES.map((file, index) => {
   let project = 'general';
@@ -258,6 +267,154 @@ app.post('/upload-file', upload.single('uploaded_file'), (req: Request, res: Res
     message: 'File uploaded successfully!',
     data: newFileEntry
   })
+})
+
+app.post('/generate-upload-url', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { fileName, contentType, project = 'general' } = req.body
+    if (!fileName) {
+      res.status(400).json({ status: 'failure', message: 'fileName is required' })
+      return
+    }
+
+    const hasPermission = checkFolderPermission(req.user?.permissions, req.user?.role, project)
+    if (!hasPermission) {
+      res.status(403).json({ status: 'failure', message: `You do not have permission to upload to ${project}` })
+      return
+    }
+
+    const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}-${fileName}`
+    const gcsPath = `${project}/${uniqueName}`
+
+    try {
+      // let clientEmail: string | undefined
+      // try {
+      //   const isMetadataAvailable = await gcpMetadata.isAvailable()
+      //   if (isMetadataAvailable) {
+      //     clientEmail = await gcpMetadata.instance('service-accounts/default/email')
+      //   }
+      // } catch (metadataError: any) {
+      //   console.warn('Failed to retrieve service account email from metadata server:', metadataError.message)
+      // }
+
+      // const storageToUse = clientEmail
+      //   ? new Storage({ credentials: { client_email: clientEmail } })
+      //   : gcsStorage
+
+      console.log("UPTO HERE")
+
+      const gcsFile = gcsStorage.bucket(BUCKET_NAME).file(gcsPath)
+      
+      const [url] = await gcsFile.getSignedUrl({
+        version: 'v4',
+        action: 'write',
+        expires: Date.now() + 15 * 60 * 1000, // 15 minutes
+        contentType: contentType || 'application/octet-stream'
+      })
+
+      console.log("URL",url)
+
+      res.status(200).json({
+        status: 'success',
+        message: 'Signed URL generated successfully',
+        data: {
+          uploadUrl: url,
+          uniqueName,
+          project,
+          fileName,
+          isFallback: false
+        }
+      })
+    } catch (gcsError: any) {
+      // Local fallback for development environment when running as user credentials
+      console.warn('GCS Signed URL generation failed, falling back to local simulation:', gcsError.message)
+      
+      // Determine protocol and host based on request headers
+      const host = req.get('host') || `localhost:${port}`
+      const protocol = req.protocol || 'http'
+      const fallbackUrl = `${protocol}://${host}/local-upload-fallback?uniqueName=${encodeURIComponent(uniqueName)}&project=${encodeURIComponent(project)}&fileName=${encodeURIComponent(fileName)}`
+
+      res.status(200).json({
+        status: 'success',
+        message: 'GCS Signed URL generation failed; using local fallback for development',
+        data: {
+          uploadUrl: fallbackUrl,
+          uniqueName,
+          project,
+          fileName,
+          isFallback: true
+        }
+      })
+    }
+  } catch (error: any) {
+    res.status(500).json({ status: 'failure', message: error.message })
+  }
+})
+
+app.put('/local-upload-fallback', (req: Request, res: Response) => {
+  try {
+    const { uniqueName } = req.query
+    if (!uniqueName || typeof uniqueName !== 'string') {
+      res.status(400).json({ status: 'failure', message: 'uniqueName is required' })
+      return
+    }
+
+    const dir = './tmp/my-uploads'
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true })
+    }
+
+    const filePath = path.join(dir, uniqueName)
+    const writeStream = fs.createWriteStream(filePath)
+    
+    req.pipe(writeStream)
+
+    req.on('end', () => {
+      res.status(200).json({ status: 'success', message: 'Local simulation upload successful' })
+    })
+
+    req.on('error', (err) => {
+      res.status(500).json({ status: 'failure', message: err.message })
+    })
+  } catch (error: any) {
+    res.status(500).json({ status: 'failure', message: error.message })
+  }
+})
+
+app.post('/register-file', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { fileName, uniqueName, project = 'general', fileType = 'unknown', fileSize = 0 } = req.body
+    if (!fileName || !uniqueName) {
+      res.status(400).json({ status: 'failure', message: 'fileName and uniqueName are required' })
+      return
+    }
+
+    const hasPermission = checkFolderPermission(req.user?.permissions, req.user?.role, project)
+    if (!hasPermission) {
+      res.status(403).json({ status: 'failure', message: `You do not have permission to register files in ${project}` })
+      return
+    }
+
+    const newFileEntry = {
+      id: uniqueName,
+      file_name: fileName,
+      file_type: fileType,
+      file_size: Number(fileSize),
+      created_at: new Date(),
+      created_by: req.user?.username || 'Admin',
+      project: project
+    }
+
+    DUP_DB_FILES.push(newFileEntry)
+
+    res.status(201).json({
+      status: 'success',
+      message: 'File registered successfully',
+      data: newFileEntry
+    })
+  } catch (error: any) {
+    res.status(500).json({ status: 'failure', message: error.message })
+  }
 })
 
 app.put('/files/:id', (req: Request, res: Response) => {
