@@ -40,12 +40,13 @@ for (const user of DUP_USERS) {
   }
 }
 
-const FRONTEND_CR_INSTANCE= process.env.FRONTEND_CR_INSTANCE || ""
-const FRONTEND_APP_LB= process.env.FRONTEND_APP_LB || ""
+const FRONTEND_CR_INSTANCE= process.env.FRONTEND_CR_INSTANCE || "https://frontend-instance-for-demo-800143476860.asia-south1.run.app"
+const FRONTEND_APP_LB= process.env.FRONTEND_APP_LB || "http://136.69.118.80"
 
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173', 
+  'https://136.69.118.80',
   FRONTEND_CR_INSTANCE,
   FRONTEND_APP_LB
 ]
@@ -56,7 +57,7 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true)
       } else {
-        callback(new Error('Not allowed by CORS'))
+        callback(null,false)
       }
     },
     credentials: true,
