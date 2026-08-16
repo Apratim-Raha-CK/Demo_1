@@ -13,6 +13,7 @@ export interface AuthenticatedRequest extends Request {
 
 export function authenticateToken(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
   const token = req.cookies?.token || req.headers['authorization']?.split(' ')[1]
+  console.log("MIDDLEWARE HIT",token)
 
   if (!token) {
     res.status(401).json({ status: 'failure', message: 'Access token missing or unauthorized access' })
