@@ -2,8 +2,6 @@ import express from 'express'
 import cors from 'cors'
 import multer from 'multer'
 import type { Request, Response } from 'express'
-import USERS from './lib/users.js'
-import DB_FILES from './lib/dbfiles.js'
 import { randomUUID } from 'node:crypto'
 import cookieParser from 'cookie-parser'
 import jwt from 'jsonwebtoken'
@@ -13,6 +11,7 @@ import path from 'node:path'
 import { Storage } from '@google-cloud/storage'
 import { authenticateToken, checkFolderPermission } from './lib/auth.js'
 import type { AuthenticatedRequest } from './lib/auth.js'
+import { query, initializeDatabase } from './lib/db.js'
 
 const app = express()
 const port = Number(process.env.PORT) || 8080
@@ -20,25 +19,7 @@ const port = Number(process.env.PORT) || 8080
 const gcsStorage = new Storage()
 const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'bucket_for_gcp_app_ar'
 
-const DUP_DB_FILES = DB_FILES.map((file, index) => {
-  let project = 'general';
-  if (index < 2) project = 'project1';
-  else if (index < 4) project = 'project2';
-  return {
-    ...file,
-    project: project
-  };
-});
-const DUP_USERS = [...USERS]
-
 const JWT_SECRET = process.env.JWT_SECRET || 'gcp_demo_app_jwt_secret_key'
-
-// Encrypt existing user passwords on startup if they aren't already encrypted
-for (const user of DUP_USERS) {
-  if (!user.password.includes(':')) {
-    user.password = encrypt(user.password)
-  }
-}
 
 const FRONTEND_CR_INSTANCE= process.env.FRONTEND_CR_INSTANCE || "https://frontend-instance-for-demo-800143476860.asia-south1.run.app"
 const FRONTEND_APP_LB= process.env.FRONTEND_APP_LB || "http://136.69.118.80"
@@ -86,10 +67,11 @@ app.get('/api/', (req: Request, res: Response) => {
   res.json({ message: 'Hello world' })
 })
 
-app.post('/api/login', (req: Request, res: Response) => {
+app.post('/api/login', async (req: Request, res: Response) => {
   const { username, password } = req.body
   try {
-    const user = DUP_USERS.find((user) => user.username.toLowerCase() === username?.trim().toLowerCase())
+    const userResult = await query('SELECT * FROM users WHERE LOWER(username) = $1', [username?.trim().toLowerCase()])
+    const user = userResult.rows[0]
     if (!user) {
       throw new Error('Invalid credentials')
     }
@@ -130,16 +112,17 @@ app.post('/api/login', (req: Request, res: Response) => {
   }
 })
 
-app.get('/api/files', (req: Request, res: Response) => {
+app.get('/api/files', async (req: Request, res: Response) => {
   try {
-    const files = DUP_DB_FILES.map((file) => ({
+    const filesResult = await query('SELECT id, file_name, file_type, file_size, created_at, created_by, project FROM files')
+    const files = filesResult.rows.map((file) => ({
       id: file.id,
       file_name: file.file_name,
       file_type: file.file_type,
-      file_size: file.file_size,
+      file_size: Number(file.file_size),
       created_at: file.created_at,
       created_by: file.created_by,
-      project: (file as any).project || 'general'
+      project: file.project || 'general'
     }))
 
     res.status(200).json({
@@ -152,19 +135,20 @@ app.get('/api/files', (req: Request, res: Response) => {
   }
 })
 
-app.get('/api/users', (req: Request, res: Response) => {
+app.get('/api/users', async (req: Request, res: Response) => {
   try {
+    const usersResult = await query('SELECT userid, username, role, permissions FROM users')
     res.status(200).json({
       status: 'success',
       message: 'Users fetched successfully',
-      data: { users: DUP_USERS }
+      data: { users: usersResult.rows }
     })
   } catch (error: any) {
     res.status(500).json({ status: 'failure', message: error.message })
   }
 })
 
-app.post('/api/create-user', (req: Request, res: Response) => {
+app.post('/api/create-user', async (req: Request, res: Response) => {
   try {
     const { username, password, role, permissions } = req.body
     if (!username || !password || !role) {
@@ -173,8 +157,8 @@ app.post('/api/create-user', (req: Request, res: Response) => {
     }
 
     const trimmedUsername = username.trim()
-    const userExists = DUP_USERS.some(u => u.username.toLowerCase() === trimmedUsername.toLowerCase())
-    if (userExists) {
+    const userExistsResult = await query('SELECT 1 FROM users WHERE LOWER(username) = $1', [trimmedUsername.toLowerCase()])
+    if (userExistsResult.rowCount && userExistsResult.rowCount > 0) {
       res.status(400).json({ status: 'failure', message: 'User already exists' })
       return
     }
@@ -187,7 +171,10 @@ app.post('/api/create-user', (req: Request, res: Response) => {
       permissions: Array.isArray(permissions) ? permissions : []
     }
 
-    DUP_USERS.push(newUser)
+    await query(
+      'INSERT INTO users (userid, username, password, role, permissions) VALUES ($1, $2, $3, $4, $5)',
+      [newUser.userid, newUser.username, newUser.password, newUser.role, newUser.permissions]
+    )
 
     res.status(201).json({
       status: 'success',
@@ -199,7 +186,7 @@ app.post('/api/create-user', (req: Request, res: Response) => {
   }
 })
 
-app.put('/api/users/:userid', (req: Request, res: Response) => {
+app.put('/api/users/:userid', async (req: Request, res: Response) => {
   try {
     const { userid } = req.params
     const { role, permissions } = req.body
@@ -209,30 +196,41 @@ app.put('/api/users/:userid', (req: Request, res: Response) => {
       return
     }
 
-    const user = DUP_USERS.find(u => u.userid === Number(userid))
+    const userResult = await query('SELECT * FROM users WHERE userid = $1', [Number(userid)])
+    const user = userResult.rows[0]
     if (!user) {
       res.status(404).json({ status: 'failure', message: 'User not found' })
       return
     }
 
-    user.role = role
-    if (Array.isArray(permissions)) {
-      user.permissions = permissions
-    }
+    const updatedPermissions = Array.isArray(permissions) ? permissions : user.permissions
+
+    await query(
+      'UPDATE users SET role = $1, permissions = $2 WHERE userid = $3',
+      [role, updatedPermissions, Number(userid)]
+    )
 
     res.status(200).json({
       status: 'success',
       message: 'User updated successfully',
-      data: { user }
+      data: { 
+        user: {
+          userid: Number(userid),
+          username: user.username,
+          role,
+          permissions: updatedPermissions
+        }
+      }
     })
   } catch (error: any) {
     res.status(500).json({ status: 'failure', message: error.message })
   }
 })
 
-app.post('/api/upload-file', upload.single('uploaded_file'), (req: Request, res: Response) => {
+app.post('/api/upload-file', upload.single('uploaded_file'), async (req: Request, res: Response) => {
   if (!req.file) {
-    return res.status(400).json({ error: 'No file.' })
+    res.status(400).json({ error: 'No file.' })
+    return
   }
 
   const newFileEntry = {
@@ -256,21 +254,28 @@ app.post('/api/upload-file', upload.single('uploaded_file'), (req: Request, res:
     }
   }
 
-  DUP_DB_FILES.push({
-    id: newFileEntry.unique_name,
-    file_name: newFileEntry.file_name,
-    file_type: newFileEntry.file_type,
-    file_size: newFileEntry.file_size,
-    created_at: newFileEntry.created_at,
-    created_by: newFileEntry.created_by,
-    project: project
-  })
+  try {
+    await query(
+      'INSERT INTO files (id, file_name, file_type, file_size, created_at, created_by, project) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [
+        newFileEntry.unique_name,
+        newFileEntry.file_name,
+        newFileEntry.file_type,
+        newFileEntry.file_size,
+        newFileEntry.created_at,
+        newFileEntry.created_by,
+        project
+      ]
+    )
 
-  res.status(201).json({
-    status: 'success',
-    message: 'File uploaded successfully!',
-    data: newFileEntry
-  })
+    res.status(201).json({
+      status: 'success',
+      message: 'File uploaded successfully!',
+      data: newFileEntry
+    })
+  } catch (error: any) {
+    res.status(500).json({ status: 'failure', message: error.message })
+  }
 })
 
 app.post('/api/generate-upload-url', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
@@ -291,20 +296,6 @@ app.post('/api/generate-upload-url', authenticateToken, async (req: Authenticate
     const gcsPath = `${project}/${uniqueName}`
 
     try {
-      // let clientEmail: string | undefined
-      // try {
-      //   const isMetadataAvailable = await gcpMetadata.isAvailable()
-      //   if (isMetadataAvailable) {
-      //     clientEmail = await gcpMetadata.instance('service-accounts/default/email')
-      //   }
-      // } catch (metadataError: any) {
-      //   console.warn('Failed to retrieve service account email from metadata server:', metadataError.message)
-      // }
-
-      // const storageToUse = clientEmail
-      //   ? new Storage({ credentials: { client_email: clientEmail } })
-      //   : gcsStorage
-
       console.log("UPTO HERE")
 
       const gcsFile = gcsStorage.bucket(BUCKET_NAME).file(gcsPath)
@@ -385,7 +376,7 @@ app.put('/api/local-upload-fallback', (req: Request, res: Response) => {
   }
 })
 
-app.post('/api/register-file', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/register-file', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { fileName, uniqueName, project = 'general', fileType = 'unknown', fileSize = 0 } = req.body
     if (!fileName || !uniqueName) {
@@ -409,7 +400,18 @@ app.post('/api/register-file', authenticateToken, (req: AuthenticatedRequest, re
       project: project
     }
 
-    DUP_DB_FILES.push(newFileEntry)
+    await query(
+      'INSERT INTO files (id, file_name, file_type, file_size, created_at, created_by, project) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [
+        newFileEntry.id,
+        newFileEntry.file_name,
+        newFileEntry.file_type,
+        newFileEntry.file_size,
+        newFileEntry.created_at,
+        newFileEntry.created_by,
+        newFileEntry.project
+      ]
+    )
 
     res.status(201).json({
       status: 'success',
@@ -421,7 +423,7 @@ app.post('/api/register-file', authenticateToken, (req: AuthenticatedRequest, re
   }
 })
 
-app.put('/api/files/:id', (req: Request, res: Response) => {
+app.put('/api/files/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params
     const { file_name } = req.body
@@ -429,31 +431,29 @@ app.put('/api/files/:id', (req: Request, res: Response) => {
       res.status(400).json({ status: 'failure', message: 'New file name is required' })
       return
     }
-    const file = DUP_DB_FILES.find(f => f.id === id)
-    if (!file) {
+    const result = await query('UPDATE files SET file_name = $1 WHERE id = $2 RETURNING *', [file_name, id])
+    if (result.rowCount === 0) {
       res.status(404).json({ status: 'failure', message: 'File not found' })
       return
     }
-    file.file_name = file_name
     res.status(200).json({
       status: 'success',
       message: 'File renamed successfully',
-      data: { file }
+      data: { file: result.rows[0] }
     })
   } catch (error: any) {
     res.status(500).json({ status: 'failure', message: error.message })
   }
 })
 
-app.delete('/api/files/:id', (req: Request, res: Response) => {
+app.delete('/api/files/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params
-    const index = DUP_DB_FILES.findIndex(f => f.id === id)
-    if (index === -1) {
+    const result = await query('DELETE FROM files WHERE id = $1', [id])
+    if (result.rowCount === 0) {
       res.status(404).json({ status: 'failure', message: 'File not found' })
       return
     }
-    DUP_DB_FILES.splice(index, 1)
     res.status(200).json({
       status: 'success',
       message: 'File deleted successfully'
@@ -463,6 +463,13 @@ app.delete('/api/files/:id', (req: Request, res: Response) => {
   }
 })
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server running on port ${port}`)
-})
+initializeDatabase()
+  .then(() => {
+    app.listen(port, '0.0.0.0', () => {
+      console.log(`Server running on port ${port}`)
+    })
+  })
+  .catch((err) => {
+    console.error('Failed to initialize database:', err)
+    process.exit(1)
+  })
