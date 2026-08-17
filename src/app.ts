@@ -90,10 +90,11 @@ app.post('/api/login', async (req: Request, res: Response) => {
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '1h' })
 
     // Set cookie with token
+    const isSecure = req.protocol === "https:";
     res.cookie('token', token, {
       httpOnly: true,
-      secure: true,
-      sameSite: 'none',
+      secure: isSecure,
+      sameSite: isSecure ? 'none' : 'lax',
       maxAge: 3600 * 1000 // 1 hour
     })
 
