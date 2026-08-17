@@ -297,7 +297,7 @@ app.post('/api/generate-upload-url', authenticateToken, async (req: Authenticate
     const gcsPath = `${project}/${uniqueName}`
 
     try {
-      console.log("UPTO HERE")
+      console.log("UPTO HERE,")
 
       const gcsFile = gcsStorage.bucket(BUCKET_NAME).file(gcsPath)
       
